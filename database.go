@@ -7,116 +7,65 @@ import (
 	"github.com/taubyte/go-sdk/database"
 )
 
-const (
-	userProfilesPrefix = "/users/profiles/"
-	userIDPrefix       = "/users/id/"
-	userUsernamePrefix = "/users/"
-)
-
 // getUserProfileFromDB retrieves a user profile by ID from the database
 func getUserProfileFromDB(id string) (*UserProfile, error) {
 	db, err := database.New("/data")
 	if err != nil {
-		return nil, fmt.Errorf("db connection failed: %w", err)
+		return nil, err
 	}
 
-	key := fmt.Sprintf("%s%s", userProfilesPrefix, id)
-	data, err := db.Get(key)
+	data, err := db.Get(fmt.Sprintf("/users/profiles/%s", id))
 	if err != nil {
-		return nil, fmt.Errorf("user profile not found for ID '%s': %w", id, err)
+		return nil, err
 	}
 
 	var profile UserProfile
-	if err := json.Unmarshal(data, &profile); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal user profile: %w", err)
-	}
-
-	return &profile, nil
+	return &profile, json.Unmarshal(data, &profile)
 }
 
 // saveUserProfile saves a user profile to the database
 func saveUserProfile(profile UserProfile) error {
 	db, err := database.New("/data")
 	if err != nil {
-		return fmt.Errorf("db connection failed: %w", err)
+		return err
 	}
 
-	profileData, err := json.Marshal(profile)
+	data, err := json.Marshal(profile)
 	if err != nil {
-		return fmt.Errorf("failed to marshal user profile: %w", err)
+		return err
 	}
 
-	key := fmt.Sprintf("%s%s", userProfilesPrefix, profile.ID)
-	if err := db.Put(key, profileData); err != nil {
-		return fmt.Errorf("failed to save user profile: %w", err)
-	}
-
-	return nil
-}
-
-// createDefaultProfile creates a default user profile with sensible defaults
-func createDefaultProfile(userID, name, email string) *UserProfile {
-	notifications := true
-	return &UserProfile{
-		ID:      userID,
-		Name:    name,
-		Email:   email,
-		Phone:   "",
-		Address: "",
-		Preferences: Preferences{
-			Language:      "en",
-			Notifications: &notifications,
-			DisplayMode:   "light",
-		},
-		Roles: []string{"buyer"},
-	}
+	return db.Put(fmt.Sprintf("/users/profiles/%s", profile.ID), data)
 }
 
 // updatePasswordInAuthDB updates the password in the auth service's database
 func updatePasswordInAuthDB(userID, hashedPassword string) error {
 	db, err := database.New("/data")
 	if err != nil {
-		return fmt.Errorf("db connection failed: %w", err)
+		return err
 	}
 
-	// Get user by ID to find username
-	idKey := fmt.Sprintf("%s%s", userIDPrefix, userID)
-	userData, err := db.Get(idKey)
+	userData, err := db.Get(fmt.Sprintf("/users/id/%s", userID))
 	if err != nil {
-		return fmt.Errorf("user not found: %w", err)
+		return err
 	}
 
-	// Parse the user data
 	var userDataMap map[string]interface{}
 	if err := json.Unmarshal(userData, &userDataMap); err != nil {
-		return fmt.Errorf("failed to unmarshal user data: %w", err)
+		return err
 	}
 
-	username, ok := userDataMap["username"].(string)
-	if !ok || username == "" {
-		return fmt.Errorf("invalid user data: username not found")
-	}
-
-	// Update password in the user data
+	username, _ := userDataMap["username"].(string)
 	userDataMap["password"] = hashedPassword
 
-	// Serialize updated user data
-	updatedUserData, err := json.Marshal(userDataMap)
+	updatedData, err := json.Marshal(userDataMap)
 	if err != nil {
-		return fmt.Errorf("failed to marshal user data: %w", err)
+		return err
 	}
 
-	// Update by ID
-	if err := db.Put(idKey, updatedUserData); err != nil {
-		return fmt.Errorf("failed to update user by ID: %w", err)
+	if err := db.Put(fmt.Sprintf("/users/id/%s", userID), updatedData); err != nil {
+		return err
 	}
 
-	// Update by username
-	usernameKey := fmt.Sprintf("%s%s", userUsernamePrefix, username)
-	if err := db.Put(usernameKey, updatedUserData); err != nil {
-		return fmt.Errorf("failed to update user by username: %w", err)
-	}
-
-	return nil
+	return db.Put(fmt.Sprintf("/users/%s", username), updatedData)
 }
-

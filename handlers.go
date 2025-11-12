@@ -1,10 +1,11 @@
 package lib
 
 import (
+	"encoding/json"
 	"strings"
 
 	"github.com/taubyte/go-sdk/event"
-	http "github.com/taubyte/go-sdk/http/event"
+	"golang.org/x/crypto/bcrypt"
 )
 
 //export getUserProfile
@@ -14,19 +15,59 @@ func getUserProfile(e event.Event) uint32 {
 		return 1
 	}
 
-	return handleRequest(h, func(h http.Event, userID string) (interface{}, error) {
-		// Get user profile
-		profile, err := getUserProfileFromDB(userID)
-		if err != nil {
-			// If profile doesn't exist, create a default one
-			profile = createDefaultProfile(userID, "", "")
-			if err := saveUserProfile(*profile); err != nil {
-				return nil, NewHTTPError("failed to create default profile", 500)
-			}
-		}
+	// CORS
+	h.Headers().Set("Access-Control-Allow-Origin", "*")
+	if method, _ := h.Method(); method == "OPTIONS" {
+		h.Return(200)
+		return 0
+	}
 
-		return profile, nil
-	}, true)
+	// Auth
+	authHeader, _ := h.Headers().Get("Authorization")
+	if len(authHeader) < 7 || authHeader[:7] != "Bearer " {
+		h.Write([]byte(`{"error":"missing authorization header"}`))
+		h.Headers().Set("Content-Type", "application/json")
+		h.Return(401)
+		return 1
+	}
+	userID, err := ValidateToken(authHeader[7:])
+	if err != nil {
+		h.Write([]byte(`{"error":"invalid or expired token"}`))
+		h.Headers().Set("Content-Type", "application/json")
+		h.Return(401)
+		return 1
+	}
+
+	// Get id from query
+	queryID, err := h.Query().Get("id")
+	if err != nil || queryID != userID {
+		h.Write([]byte(`{"error":"unauthorized"}`))
+		h.Headers().Set("Content-Type", "application/json")
+		h.Return(403)
+		return 1
+	}
+
+	// Get profile
+	profile, err := getUserProfileFromDB(userID)
+	if err != nil {
+		notifications := true
+		profile = &UserProfile{
+			ID: userID, Preferences: Preferences{Language: "en", Notifications: &notifications, DisplayMode: "light"},
+			Roles: []string{"buyer"},
+		}
+		if err := saveUserProfile(*profile); err != nil {
+			h.Write([]byte(`{"error":"failed to create profile"}`))
+			h.Headers().Set("Content-Type", "application/json")
+			h.Return(500)
+			return 1
+		}
+	}
+
+	data, _ := json.Marshal(profile)
+	h.Headers().Set("Content-Type", "application/json")
+	h.Write(data)
+	h.Return(200)
+	return 0
 }
 
 //export updateUserProfile
@@ -36,45 +77,85 @@ func updateUserProfile(e event.Event) uint32 {
 		return 1
 	}
 
-	return handleRequest(h, func(h http.Event, userID string) (interface{}, error) {
-		// Decode request body
-		var req UpdateProfileRequest
-		if err := decodeRequestBody(h, &req); err != nil {
-			return nil, err
-		}
+	h.Headers().Set("Access-Control-Allow-Origin", "*")
+	if method, _ := h.Method(); method == "OPTIONS" {
+		h.Return(200)
+		return 0
+	}
 
-		// Validate request
-		if err := ValidateUpdateProfileRequest(&req); err != nil {
-			return nil, err
-		}
+	authHeader, _ := h.Headers().Get("Authorization")
+	if len(authHeader) < 7 || authHeader[:7] != "Bearer " {
+		h.Write([]byte(`{"error":"missing authorization header"}`))
+		h.Headers().Set("Content-Type", "application/json")
+		h.Return(401)
+		return 1
+	}
+	userID, err := ValidateToken(authHeader[7:])
+	if err != nil {
+		h.Write([]byte(`{"error":"invalid or expired token"}`))
+		h.Headers().Set("Content-Type", "application/json")
+		h.Return(401)
+		return 1
+	}
 
-		// Get existing profile or create default
-		profile, err := getUserProfileFromDB(userID)
-		if err != nil {
-			profile = createDefaultProfile(userID, "", "")
-		}
+	queryID, err := h.Query().Get("id")
+	if err != nil || queryID != userID {
+		h.Write([]byte(`{"error":"unauthorized"}`))
+		h.Headers().Set("Content-Type", "application/json")
+		h.Return(403)
+		return 1
+	}
 
-		// Update fields if provided
-		if req.Name != "" {
-			profile.Name = strings.TrimSpace(req.Name)
-		}
-		if req.Email != "" {
-			profile.Email = strings.TrimSpace(req.Email)
-		}
-		if req.Phone != "" {
-			profile.Phone = strings.TrimSpace(req.Phone)
-		}
-		if req.Address != "" {
-			profile.Address = strings.TrimSpace(req.Address)
-		}
+	var req UpdateProfileRequest
+	if json.NewDecoder(h.Body()).Decode(&req) != nil {
+		h.Write([]byte(`{"error":"invalid request format"}`))
+		h.Headers().Set("Content-Type", "application/json")
+		h.Return(400)
+		return 1
+	}
+	h.Body().Close()
 
-		// Save updated profile
-		if err := saveUserProfile(*profile); err != nil {
-			return nil, NewHTTPError("failed to update profile", 500)
+	if req.Email != "" {
+		parts := strings.Split(req.Email, "@")
+		if len(parts) != 2 || len(parts[0]) == 0 || !strings.Contains(parts[1], ".") {
+			h.Write([]byte(`{"error":"invalid email format"}`))
+			h.Headers().Set("Content-Type", "application/json")
+			h.Return(400)
+			return 1
 		}
+	}
 
-		return profile, nil
-	}, true)
+	profile, _ := getUserProfileFromDB(userID)
+	if profile == nil {
+		notifications := true
+		profile = &UserProfile{ID: userID, Preferences: Preferences{Language: "en", Notifications: &notifications, DisplayMode: "light"}, Roles: []string{"buyer"}}
+	}
+
+	if req.Name != "" {
+		profile.Name = strings.TrimSpace(req.Name)
+	}
+	if req.Email != "" {
+		profile.Email = strings.TrimSpace(req.Email)
+	}
+	if req.Phone != "" {
+		profile.Phone = strings.TrimSpace(req.Phone)
+	}
+	if req.Address != "" {
+		profile.Address = strings.TrimSpace(req.Address)
+	}
+
+	if err := saveUserProfile(*profile); err != nil {
+		h.Write([]byte(`{"error":"failed to update profile"}`))
+		h.Headers().Set("Content-Type", "application/json")
+		h.Return(500)
+		return 1
+	}
+
+	data, _ := json.Marshal(profile)
+	h.Headers().Set("Content-Type", "application/json")
+	h.Write(data)
+	h.Return(200)
+	return 0
 }
 
 //export changePassword
@@ -84,31 +165,63 @@ func changePassword(e event.Event) uint32 {
 		return 1
 	}
 
-	return handleRequest(h, func(h http.Event, userID string) (interface{}, error) {
-		// Decode request body
-		var req ChangePasswordRequest
-		if err := decodeRequestBody(h, &req); err != nil {
-			return nil, err
-		}
+	h.Headers().Set("Access-Control-Allow-Origin", "*")
+	if method, _ := h.Method(); method == "OPTIONS" {
+		h.Return(200)
+		return 0
+	}
 
-		// Validate request
-		if err := ValidateChangePasswordRequest(&req); err != nil {
-			return nil, err
-		}
+	authHeader, _ := h.Headers().Get("Authorization")
+	if len(authHeader) < 7 || authHeader[:7] != "Bearer " {
+		h.Write([]byte(`{"error":"missing authorization header"}`))
+		h.Headers().Set("Content-Type", "application/json")
+		h.Return(401)
+		return 1
+	}
+	userID, err := ValidateToken(authHeader[7:])
+	if err != nil {
+		h.Write([]byte(`{"error":"invalid or expired token"}`))
+		h.Headers().Set("Content-Type", "application/json")
+		h.Return(401)
+		return 1
+	}
 
-		// Hash new password
-		hashedPassword, err := hashPassword(req.NewPassword)
-		if err != nil {
-			return nil, NewHTTPError("failed to hash password", 500)
-		}
+	queryID, err := h.Query().Get("id")
+	if err != nil || queryID != userID {
+		h.Write([]byte(`{"error":"unauthorized"}`))
+		h.Headers().Set("Content-Type", "application/json")
+		h.Return(403)
+		return 1
+	}
 
-		// Update password in auth service database
-		if err := updatePasswordInAuthDB(userID, hashedPassword); err != nil {
-			return nil, NewHTTPError("failed to update password", 500)
-		}
+	var req ChangePasswordRequest
+	if json.NewDecoder(h.Body()).Decode(&req) != nil {
+		h.Write([]byte(`{"error":"invalid request format"}`))
+		h.Headers().Set("Content-Type", "application/json")
+		h.Return(400)
+		return 1
+	}
+	h.Body().Close()
 
-		return map[string]string{"message": "password changed successfully"}, nil
-	}, true)
+	if len(strings.TrimSpace(req.NewPassword)) < 6 {
+		h.Write([]byte(`{"error":"password must be at least 6 characters"}`))
+		h.Headers().Set("Content-Type", "application/json")
+		h.Return(400)
+		return 1
+	}
+
+	hashed, _ := bcrypt.GenerateFromPassword([]byte(req.NewPassword), 10)
+	if err := updatePasswordInAuthDB(userID, string(hashed)); err != nil {
+		h.Write([]byte(`{"error":"failed to update password"}`))
+		h.Headers().Set("Content-Type", "application/json")
+		h.Return(500)
+		return 1
+	}
+
+	h.Write([]byte(`{"message":"password changed successfully"}`))
+	h.Headers().Set("Content-Type", "application/json")
+	h.Return(200)
+	return 0
 }
 
 //export updatePreferences
@@ -118,41 +231,80 @@ func updatePreferences(e event.Event) uint32 {
 		return 1
 	}
 
-	return handleRequest(h, func(h http.Event, userID string) (interface{}, error) {
-		// Decode request body
-		var req UpdatePreferencesRequest
-		if err := decodeRequestBody(h, &req); err != nil {
-			return nil, err
-		}
+	h.Headers().Set("Access-Control-Allow-Origin", "*")
+	if method, _ := h.Method(); method == "OPTIONS" {
+		h.Return(200)
+		return 0
+	}
 
-		// Validate request
-		if err := ValidateUpdatePreferencesRequest(&req); err != nil {
-			return nil, err
-		}
+	authHeader, _ := h.Headers().Get("Authorization")
+	if len(authHeader) < 7 || authHeader[:7] != "Bearer " {
+		h.Write([]byte(`{"error":"missing authorization header"}`))
+		h.Headers().Set("Content-Type", "application/json")
+		h.Return(401)
+		return 1
+	}
+	userID, err := ValidateToken(authHeader[7:])
+	if err != nil {
+		h.Write([]byte(`{"error":"invalid or expired token"}`))
+		h.Headers().Set("Content-Type", "application/json")
+		h.Return(401)
+		return 1
+	}
 
-		// Get existing profile or create default
-		profile, err := getUserProfileFromDB(userID)
-		if err != nil {
-			profile = createDefaultProfile(userID, "", "")
-		}
+	queryID, err := h.Query().Get("id")
+	if err != nil || queryID != userID {
+		h.Write([]byte(`{"error":"unauthorized"}`))
+		h.Headers().Set("Content-Type", "application/json")
+		h.Return(403)
+		return 1
+	}
 
-		// Update preferences if provided
-		if req.Language != "" {
-			profile.Preferences.Language = strings.TrimSpace(req.Language)
-		}
-		if req.Notifications != nil {
-			profile.Preferences.Notifications = req.Notifications
-		}
-		if req.DisplayMode != "" {
-			displayMode := strings.TrimSpace(strings.ToLower(req.DisplayMode))
-			profile.Preferences.DisplayMode = displayMode
-		}
+	var req UpdatePreferencesRequest
+	if json.NewDecoder(h.Body()).Decode(&req) != nil {
+		h.Write([]byte(`{"error":"invalid request format"}`))
+		h.Headers().Set("Content-Type", "application/json")
+		h.Return(400)
+		return 1
+	}
+	h.Body().Close()
 
-		// Save updated profile
-		if err := saveUserProfile(*profile); err != nil {
-			return nil, NewHTTPError("failed to update preferences", 500)
+	if req.DisplayMode != "" {
+		dm := strings.ToLower(strings.TrimSpace(req.DisplayMode))
+		if dm != "light" && dm != "dark" {
+			h.Write([]byte(`{"error":"displayMode must be 'light' or 'dark'"}`))
+			h.Headers().Set("Content-Type", "application/json")
+			h.Return(400)
+			return 1
 		}
+	}
 
-		return profile, nil
-	}, true)
+	profile, _ := getUserProfileFromDB(userID)
+	if profile == nil {
+		notifications := true
+		profile = &UserProfile{ID: userID, Preferences: Preferences{Language: "en", Notifications: &notifications, DisplayMode: "light"}, Roles: []string{"buyer"}}
+	}
+
+	if req.Language != "" {
+		profile.Preferences.Language = strings.TrimSpace(req.Language)
+	}
+	if req.Notifications != nil {
+		profile.Preferences.Notifications = req.Notifications
+	}
+	if req.DisplayMode != "" {
+		profile.Preferences.DisplayMode = strings.ToLower(strings.TrimSpace(req.DisplayMode))
+	}
+
+	if err := saveUserProfile(*profile); err != nil {
+		h.Write([]byte(`{"error":"failed to update preferences"}`))
+		h.Headers().Set("Content-Type", "application/json")
+		h.Return(500)
+		return 1
+	}
+
+	data, _ := json.Marshal(profile)
+	h.Headers().Set("Content-Type", "application/json")
+	h.Write(data)
+	h.Return(200)
+	return 0
 }
