@@ -106,36 +106,29 @@ func authenticate(h http.Event) (string, uint32) {
 // extractQueryParam extracts the user ID from query parameters
 // Handles URLs like: /api/users?id=123, /api/users?id=123&action=password
 func extractQueryParam(h http.Event, paramName string) (string, error) {
-	// Get the full URL or query string
-	// Try to get query string from the path
 	path, err := h.Path()
 	if err != nil {
 		return "", err
 	}
 
-	// Check if path contains query parameters (has ?)
-	queryStart := strings.Index(path, "?")
-	if queryStart == -1 {
+	// Split path to get query string
+	parts := strings.SplitN(path, "?", 2)
+	if len(parts) < 2 {
 		return "", fmt.Errorf("no query parameters found")
 	}
 
-	queryString := path[queryStart+1:]
-	
-	// Parse query parameters
-	params := strings.Split(queryString, "&")
-	for _, param := range params {
-		parts := strings.SplitN(param, "=", 2)
-		if len(parts) == 2 && parts[0] == paramName {
-			// URL decode the value
-			decodedValue, err := url.QueryUnescape(parts[1])
-			if err != nil {
-				// If decoding fails, return the original value
-				decodedValue = parts[1]
-			}
-			return strings.TrimSpace(decodedValue), nil
-		}
+	// Parse query string using Go's standard library
+	queryParams, err := url.ParseQuery(parts[1])
+	if err != nil {
+		return "", fmt.Errorf("failed to parse query string: %w", err)
 	}
 
-	return "", fmt.Errorf("query parameter '%s' not found", paramName)
+	// Get the parameter value
+	value := queryParams.Get(paramName)
+	if value == "" {
+		return "", fmt.Errorf("query parameter '%s' not found", paramName)
+	}
+
+	return strings.TrimSpace(value), nil
 }
 
