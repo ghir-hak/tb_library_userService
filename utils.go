@@ -19,10 +19,13 @@ func setCORSHeaders(h http.Event) {
 
 // sendJSONResponse sends a JSON response with status 200
 func sendJSONResponse(h http.Event, data interface{}) uint32 {
+	fmt.Printf("DEBUG sendJSONResponse: marshaling response data\n")
 	jsonData, err := json.Marshal(data)
 	if err != nil {
+		fmt.Printf("DEBUG sendJSONResponse: failed to marshal, error = %v\n", err)
 		return handleHTTPError(h, err, 500)
 	}
+	fmt.Printf("DEBUG sendJSONResponse: sending response (length = %d bytes)\n", len(jsonData))
 	h.Headers().Set("Content-Type", "application/json")
 	h.Write(jsonData)
 	h.Return(200)
@@ -38,9 +41,11 @@ func handleHTTPError(h http.Event, err error, code int) uint32 {
 
 // sendErrorResponse sends a JSON error response
 func sendErrorResponse(h http.Event, message string, code int) uint32 {
+	fmt.Printf("DEBUG sendErrorResponse: sending error response - code = %d, message = %s\n", code, message)
 	response := map[string]string{"error": message}
 	jsonData, err := json.Marshal(response)
 	if err != nil {
+		fmt.Printf("DEBUG sendErrorResponse: failed to marshal error response, error = %v\n", err)
 		h.Write([]byte("Internal server error"))
 		h.Return(500)
 		return 1
