@@ -108,23 +108,43 @@ func authenticate(h http.Event) (string, uint32) {
 func extractQueryParam(h http.Event, paramName string) (string, error) {
 	path, err := h.Path()
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to get path: %w", err)
 	}
+
+	// DEBUG: Print what Path() returns
+	fmt.Printf("DEBUG extractQueryParam: path = '%s'\n", path)
+	fmt.Printf("DEBUG extractQueryParam: looking for param '%s'\n", paramName)
 
 	// Split path to get query string
 	parts := strings.SplitN(path, "?", 2)
+	fmt.Printf("DEBUG extractQueryParam: split parts count = %d\n", len(parts))
+	if len(parts) > 0 {
+		fmt.Printf("DEBUG extractQueryParam: parts[0] = '%s'\n", parts[0])
+	}
+	if len(parts) > 1 {
+		fmt.Printf("DEBUG extractQueryParam: parts[1] (query string) = '%s'\n", parts[1])
+	}
+
 	if len(parts) < 2 {
-		return "", fmt.Errorf("no query parameters found")
+		// Try to get more info about the request
+		method, _ := h.Method()
+		fmt.Printf("DEBUG extractQueryParam: HTTP method = '%s'\n", method)
+		return "", fmt.Errorf("no query parameters found in path: '%s'", path)
 	}
 
 	// Parse query string using Go's standard library
 	queryParams, err := url.ParseQuery(parts[1])
 	if err != nil {
+		fmt.Printf("DEBUG extractQueryParam: ParseQuery error = %v\n", err)
 		return "", fmt.Errorf("failed to parse query string: %w", err)
 	}
 
+	fmt.Printf("DEBUG extractQueryParam: parsed query params = %+v\n", queryParams)
+
 	// Get the parameter value
 	value := queryParams.Get(paramName)
+	fmt.Printf("DEBUG extractQueryParam: value for '%s' = '%s'\n", paramName, value)
+	
 	if value == "" {
 		return "", fmt.Errorf("query parameter '%s' not found", paramName)
 	}
