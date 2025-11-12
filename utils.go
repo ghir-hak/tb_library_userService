@@ -100,9 +100,12 @@ func authenticate(h http.Event) (string, uint32) {
 	}
 
 	tokenString := authHeader[7:]
+	
 	userID, err := ValidateToken(tokenString)
 	if err != nil {
-		return "", sendErrorResponse(h, "invalid or expired token", 401)
+		// Include the actual error message in the response for debugging
+		errorMsg := fmt.Sprintf("invalid or expired token - validation error: %v", err)
+		return "", sendErrorResponse(h, errorMsg, 401)
 	}
 
 	return userID, 0
