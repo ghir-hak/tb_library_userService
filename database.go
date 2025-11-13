@@ -40,7 +40,7 @@ func saveUserProfile(profile UserProfile) error {
 
 // updatePasswordInAuthDB updates the password in the auth service's database
 func updatePasswordInAuthDB(userID, hashedPassword string) error {
-	db, err := database.New("/usersdata")
+	db, err := database.New("/data")
 	if err != nil {
 		return err
 	}
